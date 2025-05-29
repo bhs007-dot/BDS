@@ -43,7 +43,7 @@ A hybrid network and process monitoring tool for Windows, supporting:
 
 (Optional) Train your AI model:
 
-Collect normal traffic
+Collect normal traffic:
 tshark -i <interface> -T fields -e tcp.srcport -e tcp.dstport -e frame.len -Y tcp > traffic_data.csv
 Train and save the model:
 ___________________________________________________________________________
