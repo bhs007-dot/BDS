@@ -1,75 +1,84 @@
-<p align="center">
-  <img src="https://images.unsplash.com/photo-1510511459019-5dda7724fd87?auto=format&fit=crop&w=1000&q=80" alt="Blue Team Cybersecurity" width="800"/>
-</p>
+![Blue Team](https://img.shields.io/badge/Blue%20Team-Defensive%20Security-blue?style=for-the-badge&logo=shield)
 
-# Enhanced Blue Team Compromise Detection Tool (BDSv1)
+# BDSv1 Hybrid Monitoring Tool
 
-A Windows-compatible, real-time network and process monitoring tool for blue teams. Detects reverse shells, port scans, brute force attempts, suspicious processes, and more using AI, heuristics, and live traffic analysis.
+A hybrid network and process monitoring tool for Windows, supporting:
+
+- **Local network monitoring** with AI anomaly detection, heuristics, and process checks
+- **Suricata IDS integration** for advanced alerting
+- **Remote victim monitoring** via a simple agent over the local network
+
+---
 
 ## Features
 
-- **Network Traffic Monitoring** (via `tshark`)
-- **Reverse Shell & Outbound Attack Detection**
-- **Inbound Attack & Port Scan Detection**
-- **Brute Force Attempt Detection**
-- **Suspicious Process Monitoring** (LOLBins, shells, etc.)
-- **AI/ML Anomaly Detection** (optional, with pre-trained model)
-- **Verbose Debugging Output**
-- **User-friendly Interface Selection**
+- **Local Monitoring:**  
+  Uses `tshark` to capture network traffic, applies AI anomaly detection (if model present), detects suspicious ports, port scans, brute force attempts, and suspicious processes.
+
+- **Suricata IDS Integration:**  
+  Launches Suricata on a selected interface and watches for alerts in real time.
+
+- **Remote Victim Monitoring:**  
+  Listens for a connection from a remote agent (Python script) running on another machine in the same LAN, and displays live traffic data.
+
+---
 
 ## Requirements
 
-- **Python 3.7+**
-- [Wireshark](https://www.wireshark.org/download.html) (with `tshark.exe`)
-- Python packages: `psutil`, `numpy`
-- *(Optional)* `scikit-learn` and a pre-trained `traffic_model.pkl` for AI detection
+- Python 3.x
+- [Wireshark](https://www.wireshark.org/) (for `tshark`)
+- [Suricata](https://suricata.io/) (for IDS option)
+- Python packages: `psutil`, `numpy`, `scikit-learn`
 
-## Installation
+---
 
-1. **Install Wireshark**  
-   Download and install Wireshark for Windows. Ensure `tshark.exe` is installed and note its path (default: `C:\Program Files\Wireshark\tshark.exe`).
+## Usage
 
-2. **Install Python Packages**  
-   ```bash
-   pip install psutil numpy
-   # Optional for AI detection:
-   pip install scikit-learn
-   git clone https://github.com/yourusername/BDS.git
-cd BDSv1
-(Optional) Add AI Model
+1. **Clone or download this repository.**
 
-Place your pre-trained traffic_model.pkl in the script directory for anomaly detection.
+2. **Install dependencies:**
+   ```sh
+   pip install psutil numpy scikit-learn
+   Ensure tshark and suricata are installed and their paths are correct in the script.
 
-Usage
-Open Command Prompt or PowerShell as Administrator (required for packet capture).
+(Optional) Train your AI model:
 
-Start the Tool
+Collect normal traffic
+tshark -i <interface> -T fields -e tcp.srcport -e tcp.dstport -e frame.len -Y tcp > traffic_data.csv
+Train and save the model:
+___________________________________________________________________________
+import numpy as np
+from sklearn.ensemble import IsolationForest
+import pickle
 
-bash
+data = []
+with open('traffic_data.csv', 'r') as f:
+    for line in f:
+        parts = line.strip().split()
+        if len(parts) != 3:
+            continue
+        try:
+            src_port = int(parts[0])
+            dst_port = int(parts[1])
+            pkt_len = int(parts[2])
+            data.append([src_port, dst_port, pkt_len])
+        except:
+            continue
 
-Copy
+X = np.array(data)
+model = IsolationForest(contamination=0.01, random_state=42)
+model.fit(X)
+with open('traffic_model.pkl', 'wb') as f:
+    pickle.dump(model, f)
+print("Model trained and saved as traffic_model.pkl")
+__________________________________________________________________
+Run the main tool:
 python BDSv1.py
-Follow Prompts
+Notes:
+Make sure you have the necessary permissions to monitor network traffic and processes.
+For Suricata, use the full device string (e.g., \\Device\\NPF_{...}) when prompted.
+The AI model is optional; if not present, only heuristics and process checks are used.
 
-Select network interface (listed by the tool)
-Enable/disable verbose output
-Specify ports to monitor (or leave blank for all)
-Monitor Alerts
 
-Reverse shell/outbound attacks: Attacker IP is destination
-Inbound scans/attacks: Attacker IP is source
-Port scans, brute force, and suspicious processes are flagged in real time
-Example Output
 
-Copy
-=== PORT SCAN DETECTED ===
-Scanner IP: 192.168.1.100
-Scanned Ports: 22, 80, 443, 3389, ...
-When: 2024-05-29 12:34:56
-==========================
-Customization
-Edit TSHARK_PATH in the script if Wireshark is installed in a non-default location.
-Adjust detection thresholds (e.g., number of ports for scan detection) in the script as needed.
-Notes
-For best results, run on the host you wish to monitor.
-The tool is designed for blue team/defensive use in authorized environments.
+
