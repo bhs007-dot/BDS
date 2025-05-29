@@ -34,7 +34,7 @@ A Windows-compatible, real-time network and process monitoring tool for blue tea
    pip install psutil numpy
    # Optional for AI detection:
    pip install scikit-learn
-   git clone https://github.com/yourusername/BDSv1.git
+   git clone https://github.com/yourusername/BDS.git
 cd BDSv1
 (Optional) Add AI Model
 
