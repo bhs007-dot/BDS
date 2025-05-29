@@ -306,14 +306,11 @@ def main():
     while True:
         print("\nBDSv1 Hybrid Monitoring Tool Menu:")
         print("1. Start Monitoring")
-        print("2. Start Suricata")
-        print("3. Exit")
+        print("2. Exit")
         choice = input("Select an option: ").strip()
         if choice == "1":
             run_advanced_monitoring()
         elif choice == "2":
-            start_suricata_prompt()
-        elif choice == "3":
             print("Exiting.")
             break
         else:
