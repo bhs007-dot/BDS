@@ -1,11 +1,15 @@
 import sys
 import subprocess
 import os
+import requests
+import tarfile
+import shutil
 
 REQUIRED_PACKAGES = [
     "psutil",
     "numpy",
-    "scikit-learn"
+    "scikit-learn",
+    "requests"
 ]
 
 def install_and_restart_if_needed():
@@ -31,12 +35,13 @@ import threading
 import json
 from collections import defaultdict, deque
 import psutil
+from sklearn.ensemble import IsolationForest
 
 TSHARK_PATH = r"C:\Program Files\Wireshark\tshark.exe"
 SURICATA_PATH = r"C:\Program Files\Suricata\suricata.exe"
 SURICATA_CONFIG = r"C:\Program Files\Suricata\suricata.yaml"
 SURICATA_LOG_DIR = r"C:\Program Files\Suricata\log"
-SUSPICIOUS_PORTS = {4444, 8080, 1337, 9001, 9002, 6666, 1234, 4321, 31337, 2222, 5555, 3389, 5985, 5986}
+SUSPICIOUS_PORTS = {4444, 8080, 1337, 9001, 9002, 6666, 1234, 4321, 31337, 2222, 5555, 3389, 5985, 5986}  # Example suspicious ports
 SUSPICIOUS_PROCS = [
     'certutil', 'powershell', 'cmd', 'wscript', 'cscript', 'mshta', 'bitsadmin', 'rundll32', 'regsvr32', 'wmic', 'ftp', 'telnet', 'ssh'
 ]
@@ -59,6 +64,56 @@ def get_interface_number_by_name(name):
         if name in line:
             return line.split('.')[0]
     return None
+
+def infer_possible_activity(direction, src_port, dst_port):
+    # Heuristic-based inference for activity description
+    src_port = int(src_port)
+    dst_port = int(dst_port)
+    
+    if direction == "inbound":
+        if dst_port == 3389:  # RDP
+            return "Possible remote desktop compromise or brute force attack."
+        elif dst_port == 22 or dst_port == 23:  # SSH or Telnet
+            return "Likely SSH/Telnet exploit attempt or unauthorized access."
+        elif dst_port == 443:
+            return "Possible HTTPS-based command and control (C2) or data injection attempt."
+        elif dst_port == 80:
+            return "Potential web-based exploit or reconnaissance scan."
+        elif dst_port in SUSPICIOUS_PORTS or src_port in SUSPICIOUS_PORTS:
+            return "Likely exploit of a known vulnerable service or reverse shell initiation."
+        elif src_port > 1024 and dst_port < 1024:
+            return "Suspicious inbound connection, possibly a reverse shell or unauthorized access."
+        else:
+            return "Anomalous inbound traffic detected, could be reconnaissance or attack setup."
+    elif direction == "outbound":
+        if src_port == 443 or dst_port == 443:
+            return "Possible data exfiltration over HTTPS or beaconing to C2 server."
+        elif dst_port in SUSPICIOUS_PORTS:
+            return "Outbound connection to known malicious port, indicating potential data leak or callback."
+        elif src_port in SUSPICIOUS_PORTS:
+            return "Suspicious outbound traffic, may involve malware communication."
+        else:
+            return "Anomalous outbound traffic, may involve data exfiltration or communication with external entities."
+    else:
+        return "Uncertain direction, possible lateral movement or internal reconnaissance."
+
+def get_ai_severity(anomaly_score):
+    # AI-based severity using anomaly score from Isolation Forest
+    if anomaly_score < 0.1:
+        return "Critical"
+    elif anomaly_score < 0.3:
+        return "High"
+    else:
+        return "Medium"
+
+def infer_process_severity(process_name):
+    # Heuristic severity for process-based alerts
+    if process_name.lower() in ['powershell', 'cmd', 'wscript', 'cscript', 'mshta', 'bitsadmin', 'rundll32']:
+        return "High"
+    elif process_name.lower() in ['regsvr32', 'wmic']:
+        return "Medium"
+    else:
+        return "Medium"  # Default for other suspicious processes
 
 def countdown_timer(minutes):
     total_seconds = minutes * 60
@@ -135,7 +190,6 @@ def train_ai_model_from_file(csv_file):
         print("[!] No valid data found for training.")
         return None
     X = np.array(data)
-    from sklearn.ensemble import IsolationForest
     model = IsolationForest(contamination=0.01, random_state=42)
     model.fit(X)
     with open('traffic_model.pkl', 'wb') as f:
@@ -171,17 +225,13 @@ def check_suspicious_processes():
     return alerts
 
 def select_interface():
-    print("\n[*] Listing available network interfaces (from tshark):")
-    try:
-        result = subprocess.run([TSHARK_PATH, "-D"], capture_output=True, text=True)
-        interfaces = result.stdout.strip().split('\n')
-        for iface in interfaces:
-            print(iface)
-        iface_num = input("Enter the interface number to monitor (e.g., 1): ").strip()
-        return iface_num
-    except Exception as e:
-        print(f"[!] Could not list interfaces: {e}")
-        exit(1)
+    print("\n[*] Listing available network interfaces with IPs:")
+    interfaces = list_interfaces_with_ips()
+    for idx, iface, ip in interfaces:
+        print(f"{idx}. {iface} - IP: {ip if ip else 'No IP'}")
+    choice = int(input("Select the interface number to use: ").strip())
+    iface_name = interfaces[choice - 1][1]  # Return the interface name
+    return iface_name
 
 def run_advanced_monitoring(realtime=True, interval=10):
     print("\n[+] BDSv1 Hybrid Detection (AI + Heuristics + Process Monitoring)")
@@ -190,14 +240,21 @@ def run_advanced_monitoring(realtime=True, interval=10):
     display_filter = "tcp"
     if monitor_ports:
         display_filter += f" && (tcp.port in {{{monitor_ports}}})"
-    interface_num = select_interface()
+    
+    # Select interface with IP display
+    iface_name = select_interface()
+    iface_num = get_interface_number_by_name(iface_name)
+    if not iface_num:
+        print(f"[!] Could not find interface number for {iface_name}. Exiting.")
+        return
+    
     tshark_cmd = [
-        TSHARK_PATH, "-i", interface_num, "-Y", display_filter,
+        TSHARK_PATH, "-i", iface_num, "-Y", display_filter,
         "-T", "fields",
         "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst",
         "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len"
     ]
-    print(f"[*] Monitoring started. Press Ctrl+C to stop.")
+    print(f"[*] Monitoring started on interface {iface_name}. Press Ctrl+C to stop.")
     if verbose:
         print("[DEBUG] Using tshark command: " + " ".join(tshark_cmd))
         print("[DEBUG] Display filter: " + display_filter)
@@ -241,8 +298,19 @@ def run_advanced_monitoring(realtime=True, interval=10):
 
             alert_msgs = []
 
-            # Heuristic: suspicious port
+            # Heuristic: suspicious port with AI severity
             if dst_port.isdigit() and int(dst_port) in SUSPICIOUS_PORTS:
+                if ai_model:
+                    try:
+                        features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                        anomaly_score = ai_model.decision_function(features)[0]
+                        severity = get_ai_severity(anomaly_score)
+                    except Exception as e:
+                        if verbose:
+                            print(f"[DEBUG] AI severity error for heuristic alert: {e}")
+                        severity = "Medium"  # Fallback if AI fails
+                else:
+                    severity = "Medium"  # No AI model, use default
                 if direction == "outbound":
                     alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Reverse Shell/Outbound) ===\nWho (Hacker IP): {dst_ip}")
                 elif direction == "inbound":
@@ -251,15 +319,19 @@ def run_advanced_monitoring(realtime=True, interval=10):
                     alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
                 alert_msgs.append(f"When: {timestamp}")
                 alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
+                alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
                 alert_msgs.append(f"Session: ACTIVE")
                 alert_msgs.append("=======================================================")
 
-            # AI anomaly detection
+            # AI anomaly detection with inferred activity and AI severity
             if ai_model:
                 try:
                     features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
                     prediction = ai_model.predict(features)  # -1 = anomaly, 1 = normal
-                    if prediction[0] == -1:
+                    if prediction[0] == -1:  # Anomaly detected
+                        anomaly_score = ai_model.decision_function(features)[0]
+                        activity = infer_possible_activity(direction, src_port, dst_port)
+                        severity = get_ai_severity(anomaly_score)
                         if direction == "outbound":
                             alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Outbound) ===\nWho (Hacker IP): {dst_ip}")
                         elif direction == "inbound":
@@ -268,38 +340,67 @@ def run_advanced_monitoring(realtime=True, interval=10):
                             alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
                         alert_msgs.append(f"When: {timestamp}")
                         alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
+                        alert_msgs.append(f"Possible Activity: {activity}")
+                        alert_msgs.append(f"Severity: {severity} (AI-assessed)")
                         alert_msgs.append(f"Session: ACTIVE")
                         alert_msgs.append("==============================")
                 except Exception as e:
                     if verbose:
                         print(f"[DEBUG] AI detection error: {e}")
 
-            # Port scan detection (inbound)
+            # Port scan detection with AI severity
             if direction == "inbound":
                 scan_tracker[src_ip].append(dst_port)
                 unique_ports = set(scan_tracker[src_ip])
                 if len(unique_ports) > 10:
+                    if ai_model:
+                        try:
+                            features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                            anomaly_score = ai_model.decision_function(features)[0]
+                            severity = get_ai_severity(anomaly_score)
+                        except Exception as e:
+                            if verbose:
+                                print(f"[DEBUG] AI severity error for port scan: {e}")
+                            severity = "Medium"  # Fallback
+                    else:
+                        severity = "Medium"  # No AI model
                     alert_msgs.append(f"\n=== PORT SCAN DETECTED ===\nScanner IP: {src_ip}")
                     alert_msgs.append(f"Scanned Ports: {', '.join(list(unique_ports)[:15])} ...")
                     alert_msgs.append(f"When: {timestamp}")
+                    alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
                     alert_msgs.append("==========================")
 
-            # Brute force detection (inbound, same port many times)
+            # Brute force detection with AI severity
             if direction == "inbound":
                 brute_tracker[(src_ip, dst_port)].append(timestamp)
                 if len(brute_tracker[(src_ip, dst_port)]) > 20:
+                    if ai_model:
+                        try:
+                            features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                            anomaly_score = ai_model.decision_function(features)[0]
+                            severity = get_ai_severity(anomaly_score)
+                        except Exception as e:
+                            if verbose:
+                                print(f"[DEBUG] AI severity error for brute force: {e}")
+                            severity = "High"  # Fallback for brute force
+                    else:
+                        severity = "High"  # No AI model, default high for brute force
                     alert_msgs.append(f"\n=== BRUTE FORCE ATTEMPT DETECTED ===\nAttacker IP: {src_ip}")
                     alert_msgs.append(f"Target Port: {dst_port}")
                     alert_msgs.append(f"Attempts: {len(brute_tracker[(src_ip,dst_port)])}")
                     alert_msgs.append(f"When: {timestamp}")
+                    alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
                     alert_msgs.append("===============================")
 
-            # Periodically check for suspicious processes (every 10 seconds)
+            # Periodically check for suspicious processes with heuristic severity
             now = time.time()
             if now - last_proc_check > 10:
                 proc_alerts = check_suspicious_processes()
                 for alert in proc_alerts:
-                    alert_msgs.append(f"\n{alert}")
+                    process_name = alert.split()[3]  # Extract process name from alert string (e.g., "Suspicious process: powershell")
+                    heuristic_severity = infer_process_severity(process_name)
+                    process_alert_msg = f"{alert}\nSeverity: {heuristic_severity} (heuristic)"
+                    alert_msgs.append(f"\n{process_alert_msg}")
                 last_proc_check = now
 
             # Output alerts
@@ -323,31 +424,59 @@ def run_advanced_monitoring(realtime=True, interval=10):
     except Exception as e:
         print(f"[!] An error occurred: {e}")
 
-def start_suricata_prompt():
-    print("\n[+] Starting Suricata IDS in background")
-    print("[*] Listing available network interfaces (from Suricata):")
+def download_suricata_rules():
+    print("[*] Downloading and updating Suricata rules...")
+    rules_url = "https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz"
+    rules_dir = os.path.dirname(SURICATA_CONFIG) + "/rules"  # Typically C:\Program Files\Suricata\rules
+    temp_file = "emerging_rules.tar.gz"
+
+    # Ensure rules directory exists
+    if not os.path.exists(rules_dir):
+        os.makedirs(rules_dir)
+
     try:
-        result = subprocess.run([SURICATA_PATH, "-I"], capture_output=True, text=True)
-        interfaces = result.stdout.strip().split('\n')
-        for iface in interfaces:
-            print(iface)
-        iface_str = input("Enter the full device string for your interface (e.g., \\Device\\NPF_{...}): ").strip()
-        suricata_cmd = [
-            SURICATA_PATH,
-            "-i", iface_str,
-            "-c", SURICATA_CONFIG,
-            "-l", SURICATA_LOG_DIR
-        ]
-        print(f"[*] Suricata starting on interface {iface_str} in background. Alerts will be monitored.")
-        # Start Suricata in background (non-blocking)
-        suricata_proc = subprocess.Popen(suricata_cmd)
-        # Start watcher thread for alerts
-        watcher_thread = threading.Thread(target=suricata_alert_watcher, daemon=True)
-        watcher_thread.start()
-    except KeyboardInterrupt:
-        print("\n[!] Suricata setup interrupted by user.")
+        response = requests.get(rules_url, stream=True)
+        if response.status_code == 200:
+            with open(temp_file, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=128):
+                    f.write(chunk)
+            print("[+] Rules downloaded successfully.")
+            
+            # Extract the tar.gz file
+            with tarfile.open(temp_file, 'r:gz') as tar:
+                tar.extractall(path=rules_dir)
+            print("[+] Rules extracted to " + rules_dir)
+            
+            # Clean up temporary file
+            os.remove(temp_file)
+        else:
+            print(f"[!] Failed to download rules. Status code: {response.status_code}. Please check the URL or download manually.")
     except Exception as e:
-        print(f"[!] Suricata error: {e}")
+        print(f"[!] Error downloading or extracting rules: {e}. Continuing without updating rules.")
+
+def start_suricata_prompt():
+    print("\n[+] Starting Suricata IDS in background with interface selection")
+    interfaces = list_interfaces_with_ips()
+    print("Available interfaces for Suricata:")
+    for idx, iface, ip in interfaces:
+        print(f"{idx}. {iface} - IP: {ip if ip else 'No IP'}")
+    choice = int(input("Select the interface number for Suricata: ").strip())
+    iface_name = interfaces[choice - 1][1]  # Get the interface name from selection
+    
+    # For Suricata, we might need the full device string, but we'll use the name for simplicity
+    # If issues arise, user can update SURICATA_PATH or config
+    suricata_cmd = [
+        SURICATA_PATH,
+        "-i", iface_name,  # Use the selected interface name
+        "-c", SURICATA_CONFIG,
+        "-l", SURICATA_LOG_DIR
+    ]
+    print(f"[*] Suricata starting on interface {iface_name} in background. Alerts will be monitored.")
+    # Start Suricata in background (non-blocking)
+    suricata_proc = subprocess.Popen(suricata_cmd)
+    # Start watcher thread for alerts
+    watcher_thread = threading.Thread(target=suricata_alert_watcher, daemon=True)
+    watcher_thread.start()
 
 def suricata_alert_watcher():
     alert_file = os.path.join(SURICATA_LOG_DIR, "fast.log")
@@ -404,10 +533,12 @@ def main():
     if ai_model is None:
         print("[!] AI model training failed. Exiting.")
         return
-    # Step 3: Start Suricata in background before monitoring
+    # Step 3: Download and update Suricata rules before starting Suricata
+    download_suricata_rules()
+    # Step 4: Start Suricata in background with interface selection
     print("\n[+] Setting up and starting Suricata IDS before monitoring options.")
     start_suricata_prompt()
-    # Step 4: Go to monitoring menu (with Suricata already running)
+    # Step 5: Go to monitoring menu (with Suricata already running)
     monitoring_menu()
 
 if __name__ == "__main__":
