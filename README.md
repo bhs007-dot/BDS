@@ -8,6 +8,7 @@ This Python script is a hybrid network monitoring and anomaly detection tool des
 
 ## Features
 - Real-time and batch monitoring of network traffic.
+- Tracking attacker Behavirur 
 - AI-driven anomaly detection for traffic patterns, including severity flags (Critical, High, Medium) based on anomaly scores.
 - Heuristic detections for suspicious ports, port scans, brute force attempts, and process monitoring.
 - User-friendly interface selection with IP address display.
