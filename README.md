@@ -1,8 +1,6 @@
   
  Blue Team Defense Tool
 
-![BlueTeam Wallpaper]([https://via.placeholder.com/1200x400?text=Blue+Team+Defense+Wallpaper](https://netline.az/media/courses/course/2024/07/28/image_2024-07-28_223228562.png))  <!-- Replace this URL with your own image or upload one to your repo -->
-
 # Blue Team Detection Script (BDSv1)
 
 ## Overview
