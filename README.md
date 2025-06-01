@@ -1,65 +1,78 @@
+  _____         _     _       _   
+ |  __ \       | |   | |     | |  
+ | |__) |___  _| |__ | | __ _| |_ 
+ |  _  // _ \| | '_ \| |/ _` | __|
+ | | \ \ (_) | | |_) | | (_| | |_ 
+ |_|  \_\___/|_|_.__/|_|\__,_|\__|
+                                 
+ Blue Team Defense Tool
+
 # Blue Team Detection Script (BDSv1)
 
-
 ## Overview
-This Python script is a comprehensive blue team tool designed for authorized penetration testers and cybersecurity professionals. It provides hybrid intrusion detection using AI-based anomaly detection, heuristic rules, and process monitoring. The script captures network traffic for AI training, detects potential compromises, and integrates Suricata IDS for enhanced alerting. It's built for ethical hacking and security testing, ensuring compliance with authorized activities.
+This Python script is a hybrid network monitoring and anomaly detection tool designed for blue team operations and penetration testing. It integrates traffic capture with tshark, intrusion detection using Suricata, and AI-based anomaly detection using an Isolation Forest model. The script helps detect potential compromises, port scans, brute force attacks, and suspicious processes, with AI-enhanced severity assessments for alerts.
 
-Key features:
-- Automatic installation of required Python packages.
-- Flexible traffic capture duration (minutes, hours, days, weeks).
-- AI model training using Isolation Forest for anomaly detection.
-- Heuristic detection for suspicious ports and behaviors.
-- Integration with Suricata IDS, which starts automatically in the background.
-- Simplified monitoring menu with realtime and batch alert options.
-- Cross-compatible with Windows (using Wireshark and Suricata).
-
-As a certified pentester (e.g., OSCP, CEH), this tool helps streamline your defensive security assessments.
-
-## Requirements
-- Python 3.6 or higher.
-- Wireshark installed (for tshark.exe).
-- Suricata IDS installed (for suricata.exe). Ensure it's accessible via the default path or update the script.
-- Dependencies are automatically installed by the script, but you may need pip and internet access for the first run.
+## Features
+- Real-time and batch monitoring of network traffic.
+- AI-driven anomaly detection for traffic patterns, including severity flags (Critical, High, Medium) based on anomaly scores.
+- Heuristic detections for suspicious ports, port scans, brute force attempts, and process monitoring.
+- User-friendly interface selection with IP address display.
+- Alert enhancements including "Possible Activity" descriptions and AI-assessed or heuristic severity levels.
+- Integration with Suricata for additional IDS capabilities, with automatic rule updates.
+- Consistent severity assessment across all alert types for better prioritization.
 
 ## Installation
-1. Clone or download this repository to your local machine.
-2. Ensure Wireshark and Suricata are installed:
-   - Wireshark: Download from [https://www.wireshark.org/](https://www.wireshark.org/) and install.
-   - Suricata: Download from [https://suricata-ids.org/download/](https://suricata-ids.org/download/). On Windows, use WSL for easier setup if needed.
-3. Run the script with Python:
-4. python BDSv1.py
+1. **Prerequisites:**
+   - Python 3.x installed.
+   - Wireshark installed (ensures tshark is available at `C:\Program Files\Wireshark\tshark.exe`).
+   - Suricata installed (ensures suricata is available at `C:\Program Files\Suricata\suricata.exe`).
+   - Administrative privileges to run the script and access network interfaces.
 
-5. The script will automatically check and install Python packages like `psutil`, `numpy`, and `scikit-learn` if missing.
+2. **Dependencies:**
+   - The script automatically installs required Python packages (psutil, numpy, scikit-learn, requests) if missing.
+   - Run the script to handle package installation. If issues arise, install them manually using pip:
+     ```
+     pip install psutil numpy scikit-learn requests
+     ```
+
+3. **Script Paths:**
+   - Ensure tshark and suricata paths are correct in the script (defined as constants). Update them if your installation paths differ.
 
 ## Usage
-1. **Run the Script:** Execute `python blue_team.py`. It will:
-- Prompt you to select a network interface and capture duration for AI training.
-- Train an AI model based on captured traffic.
-- Automatically start Suricata IDS in the background and begin monitoring its alerts.
-- Enter the monitoring menu.
+1. **Run the Script:**
+   - Execute the script with Python:
+     ```
+     python blue_team.py
+     ```
+   - The script will:
+     - Prompt for traffic capture to train the AI model.
+     - Download and update Suricata rules.
+     - Start Suricata in the background.
+     - Enter the monitoring menu for real-time or batch alerts.
 
-2. **Monitoring Menu:**
-- **Option 1: Start Monitoring (Realtime Alerts)**: Runs continuous monitoring with immediate alerts for anomalies, suspicious ports, port scans, brute force attempts, and Suricata events.
-- **Option 2: Start Monitoring (Batch Alerts)**: Similar to realtime but batches alerts at specified intervals for less noise.
-- **Option 3: Exit**: Quits the script.
+2. **Monitoring Menu Options:**
+   - **1. Start Monitoring (Realtime Alerts):** Continuous monitoring with immediate alert output.
+   - **2. Start Monitoring (Batch Alerts):** Monitoring with alerts grouped at specified intervals (e.g., every 10 seconds).
+   - **3. Exit:** Quit the monitoring loop.
 
-3. **Example Workflow:**
-- During capture, the script counts down the time and saves data.
-- In monitoring mode, it detects threats and prints alerts. Press Ctrl+C to stop monitoring.
-- Suricata alerts are handled in the background and printed as they occur.
+3. **Key Interactions:**
+   - During monitoring, the script detects anomalies and outputs detailed alerts with severity levels.
+   - Use Ctrl+C to interrupt monitoring gracefully.
 
-## Configuration
-- **Paths:** Update constants in the script if your installations differ:
-- `TSHARK_PATH`: Path to tshark.exe (e.g., `r"C:\Program Files\Wireshark\tshark.exe"`).
-- `SURICATA_PATH`: Path to suricata.exe (e.g., `r"C:\Program Files\Suricata\suricata.exe"`).
-- `SURICATA_CONFIG`: Path to suricata.yaml configuration file.
-- `SURICATA_LOG_DIR`: Directory for Suricata logs.
+4. **Customization:**
+   - Edit the script to adjust suspicious ports, processes, or AI parameters (e.g., contamination rate in IsolationForest).
+   - For advanced users, modify the `infer_possible_activity` or severity functions to fit specific environments.
 
-- **Suspicious Ports and Processes:** You can modify the lists `SUSPICIOUS_PORTS` and `SUSPICIOUS_PROCS` in the script to customize detection.
+## Changelog
+- **Initial Version:** Basic traffic capture, AI training, and heuristic detections.
+- **Update 1:** Added user-friendly interface selection with IP display.
+- **Update 2:** Enhanced alerts with "Possible Activity" and AI-based severity for AI compromise detection.
+- **Update 3:** Extended AI severity to all packet-based alerts (heuristic, port scan, brute force) and added heuristic severity for process alerts.
+- **Latest Update:** Incorporated ASCII art banner for BlueTeam theme; ensured consistent AI flags across all alert types.
 
-## Notes
-- This script is intended for authorized use only. Ensure you have permission before running network captures or monitoring.
-- For contributions or issues, feel free to open a pull request or report on GitHub.
+## Contribution
+- This script is open for contributions! Feel free to fork the repository, make improvements, and submit pull requests.
+- Report issues or suggest features on the GitHub issues page.
 
 ## License
-This script is provided under the MIT License. See the LICENSE file for details.
+MIT License (or specify your preferred license in the script).
