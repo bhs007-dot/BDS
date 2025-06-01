@@ -1,84 +1,63 @@
-![Blue Team](https://img.shields.io/badge/Blue%20Team-Defensive%20Security-blue?style=for-the-badge&logo=shield)
+# Blue Team Detection Script (BDSv1)
 
-# BDSv1 Hybrid Monitoring Tool
+## Overview
+This Python script is a comprehensive blue team tool designed for authorized penetration testers and cybersecurity professionals. It provides hybrid intrusion detection using AI-based anomaly detection, heuristic rules, and process monitoring. The script captures network traffic for AI training, detects potential compromises, and integrates Suricata IDS for enhanced alerting. It's built for ethical hacking and security testing, ensuring compliance with authorized activities.
 
-A hybrid network and process monitoring tool for Windows, supporting:
+Key features:
+- Automatic installation of required Python packages.
+- Flexible traffic capture duration (minutes, hours, days, weeks).
+- AI model training using Isolation Forest for anomaly detection.
+- Heuristic detection for suspicious ports and behaviors.
+- Integration with Suricata IDS, which starts automatically in the background.
+- Simplified monitoring menu with realtime and batch alert options.
+- Cross-compatible with Windows (using Wireshark and Suricata).
 
-- **Local network monitoring** with AI anomaly detection, heuristics, and process checks
-- **Suricata IDS integration** for advanced alerting
-- **Remote victim monitoring** via a simple agent over the local network
-
----
-
-## Features
-
-- **Local Monitoring:**  
-  Uses `tshark` to capture network traffic, applies AI anomaly detection (if model present), detects suspicious ports, port scans, brute force attempts, and suspicious processes.
-
-- **Suricata IDS Integration:**  
-  Launches Suricata on a selected interface and watches for alerts in real time.
-
-- **Remote Victim Monitoring:**  
-  Listens for a connection from a remote agent (Python script) running on another machine in the same LAN, and displays live traffic data.
-
----
+As a certified pentester (e.g., OSCP, CEH), this tool helps streamline your defensive security assessments.
 
 ## Requirements
+- Python 3.6 or higher.
+- Wireshark installed (for tshark.exe).
+- Suricata IDS installed (for suricata.exe). Ensure it's accessible via the default path or update the script.
+- Dependencies are automatically installed by the script, but you may need pip and internet access for the first run.
 
-- Python 3.x
-- [Wireshark](https://www.wireshark.org/) (for `tshark`)
-- [Suricata](https://suricata.io/) (for IDS option)
-- Python packages: `psutil`, `numpy`, `scikit-learn`
-
----
+## Installation
+1. Clone or download this repository to your local machine.
+2. Ensure Wireshark and Suricata are installed:
+   - Wireshark: Download from [https://www.wireshark.org/](https://www.wireshark.org/) and install.
+   - Suricata: Download from [https://suricata-ids.org/download/](https://suricata-ids.org/download/). On Windows, use WSL for easier setup if needed.
+3. Run the script with Python:
+4. python BDSv1.py
+5. The script will automatically check and install Python packages like `psutil`, `numpy`, and `scikit-learn` if missing.
 
 ## Usage
+1. **Run the Script:** Execute `python blue_team.py`. It will:
+- Prompt you to select a network interface and capture duration for AI training.
+- Train an AI model based on captured traffic.
+- Automatically start Suricata IDS in the background and begin monitoring its alerts.
+- Enter the monitoring menu.
 
-1. **Clone or download this repository.**
+2. **Monitoring Menu:**
+- **Option 1: Start Monitoring (Realtime Alerts)**: Runs continuous monitoring with immediate alerts for anomalies, suspicious ports, port scans, brute force attempts, and Suricata events.
+- **Option 2: Start Monitoring (Batch Alerts)**: Similar to realtime but batches alerts at specified intervals for less noise.
+- **Option 3: Exit**: Quits the script.
 
-2. **Install dependencies:**
-   ```sh
-   pip install psutil numpy scikit-learn
-   Ensure tshark and suricata are installed and their paths are correct in the script.
+3. **Example Workflow:**
+- During capture, the script counts down the time and saves data.
+- In monitoring mode, it detects threats and prints alerts. Press Ctrl+C to stop monitoring.
+- Suricata alerts are handled in the background and printed as they occur.
 
-(Optional) Train your AI model:
+## Configuration
+- **Paths:** Update constants in the script if your installations differ:
+- `TSHARK_PATH`: Path to tshark.exe (e.g., `r"C:\Program Files\Wireshark\tshark.exe"`).
+- `SURICATA_PATH`: Path to suricata.exe (e.g., `r"C:\Program Files\Suricata\suricata.exe"`).
+- `SURICATA_CONFIG`: Path to suricata.yaml configuration file.
+- `SURICATA_LOG_DIR`: Directory for Suricata logs.
 
-Collect normal traffic:
-tshark -i <interface> -T fields -e tcp.srcport -e tcp.dstport -e frame.len -Y tcp > traffic_data.csv
-Train and save the model:
-___________________________________________________________________________
-import numpy as np
-from sklearn.ensemble import IsolationForest
-import pickle
+- **Suspicious Ports and Processes:** You can modify the lists `SUSPICIOUS_PORTS` and `SUSPICIOUS_PROCS` in the script to customize detection.
 
-data = []
-with open('traffic_data.csv', 'r') as f:
-    for line in f:
-        parts = line.strip().split()
-        if len(parts) != 3:
-            continue
-        try:
-            src_port = int(parts[0])
-            dst_port = int(parts[1])
-            pkt_len = int(parts[2])
-            data.append([src_port, dst_port, pkt_len])
-        except:
-            continue
+## Notes
+- This script is intended for authorized use only. Ensure you have permission before running network captures or monitoring.
+- For contributions or issues, feel free to open a pull request or report on GitHub.
 
-X = np.array(data)
-model = IsolationForest(contamination=0.01, random_state=42)
-model.fit(X)
-with open('traffic_model.pkl', 'wb') as f:
-    pickle.dump(model, f)
-print("Model trained and saved as traffic_model.pkl")
-__________________________________________________________________
-Run the main tool:
-python BDSv1.py
-Notes:
-Make sure you have the necessary permissions to monitor network traffic and processes.
-For Suricata, use the full device string (e.g., \\Device\\NPF_{...}) when prompted.
-The AI model is optional; if not present, only heuristics and process checks are used.
-
-
-
-
+## License
+This script is provided under the MIT License. See the LICENSE file for details.
