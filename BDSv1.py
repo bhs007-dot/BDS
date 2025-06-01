@@ -5,7 +5,7 @@ import requests
 import tarfile
 import shutil
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 REQUIRED_PACKAGES = [
     "psutil",
@@ -47,6 +47,7 @@ SUSPICIOUS_PROCS = [
     'certutil', 'powershell', 'cmd', 'wscript', 'cscript', 'mshta', 'bitsadmin', 'rundll32', 'regsvr32', 'wmic', 'ftp', 'telnet', 'ssh'
 ]
 ALERT_COOLDOWN_SECONDS = 60  # Cooldown period in seconds for alert deduplication
+BEHAVIOR_TRACKER_MAX_HISTORY = 10  # Max number of alert events to store per IP for behavior tracking
 
 def list_interfaces_with_ips():
     interfaces = []
@@ -116,6 +117,25 @@ def infer_process_severity(process_name):
         return "Medium"
     else:
         return "Medium"  # Default for other suspicious processes
+
+def generate_behavior_summary(behavior_data):
+    # Generate a simple summary string from behavior data
+    if not behavior_data['alerts']:
+        return "No prior behavior tracked."
+    counts = behavior_data['counts']
+    summary = f"Total alerts: {len(behavior_data['alerts'])}"
+    if counts['heuristic'] > 0:
+        summary += f", Heuristic alerts: {counts['heuristic']}"
+    if counts['ai_compromise'] > 0:
+        summary += f", AI compromises: {counts['ai_compromise']}"
+    if counts['port_scan'] > 0:
+        summary += f", Port scans: {counts['port_scan']}"
+    if counts['brute_force'] > 0:
+        summary += f", Brute force attempts: {counts['brute_force']}"
+    # Add time-based insight if possible
+    last_alert_time = behavior_data['alerts'][-1]['timestamp']
+    summary += f", Last activity: {last_alert_time}"
+    return summary
 
 def countdown_timer(minutes):
     total_seconds = minutes * 60
@@ -236,7 +256,7 @@ def select_interface():
     return iface_name
 
 def run_advanced_monitoring(realtime=True, interval=10):
-    print("\n[+] BDSv1 Hybrid Detection (AI + Heuristics + Process Monitoring)")
+    print("\n[+] BDSv1 Hybrid Detection (AI + Heuristics + Process Monitoring with Behavior Tracking)")
     verbose = input("Enable verbose debugging output? (y/n, default n): ").strip().lower() == 'y'
     monitor_ports = input("Enter ports to monitor (comma-separated, e.g., 4444,8080), or leave blank for all: ").strip()
     display_filter = "tcp"
@@ -265,6 +285,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
     scan_tracker = defaultdict(lambda: deque(maxlen=100))  # src_ip -> deque of dst_ports
     brute_tracker = defaultdict(lambda: deque(maxlen=100)) # src_ip+dst_port -> deque of timestamps
     alert_cooldown = defaultdict(float)  # Track last alert time for (IP, alert_type) or (process_name, "suspicious_process")
+    behavior_tracker = defaultdict(lambda: {'alerts': [], 'counts': defaultdict(int)})  # IP -> {alerts: list of dicts, counts: dict of alert types}
 
     alerts = []
     last_update = time.time()
@@ -294,18 +315,21 @@ def run_advanced_monitoring(realtime=True, interval=10):
             # Determine direction
             if src_ip in local_ips and dst_ip not in local_ips:
                 direction = "outbound"
+                hacker_ip = dst_ip  # Outbound: remote IP is the potential hacker
             elif dst_ip in local_ips and src_ip not in local_ips:
                 direction = "inbound"
+                hacker_ip = src_ip  # Inbound: source IP is the potential hacker
             else:
                 direction = "unknown"
+                hacker_ip = src_ip or dst_ip  # Use source or destination as fallback
 
             alert_msgs = []
 
-            # Heuristic: suspicious port with AI severity and alert deduplication
+            # Heuristic: suspicious port with AI severity, deduplication, and behavior tracking
             if dst_port.isdigit() and int(dst_port) in SUSPICIOUS_PORTS:
                 alert_type = "heuristic"
-                if time.time() - alert_cooldown.get((src_ip if direction == "inbound" else dst_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
-                    alert_cooldown[(src_ip if direction == "inbound" else dst_ip, alert_type)] = time.time()
+                if time.time() - alert_cooldown.get((hacker_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                    alert_cooldown[(hacker_ip, alert_type)] = time.time()
                     if ai_model:
                         try:
                             features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
@@ -318,53 +342,67 @@ def run_advanced_monitoring(realtime=True, interval=10):
                     else:
                         severity = "Medium"  # No AI model
                     if direction == "outbound":
-                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Reverse Shell/Outbound) ===\nWho (Hacker IP): {dst_ip}")
+                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Reverse Shell/Outbound) ===\nWho (Hacker IP): {hacker_ip}")
                     elif direction == "inbound":
-                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Inbound/Scan/Exploit) ===\nWho (Hacker IP): {src_ip}")
+                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Inbound/Scan/Exploit) ===\nWho (Hacker IP): {hacker_ip}")
                     else:
                         alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
                     alert_msgs.append(f"When: {timestamp}")
                     alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
                     alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                    # Update behavior tracker
+                    behavior_tracker[hacker_ip]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                    if len(behavior_tracker[hacker_ip]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                        behavior_tracker[hacker_ip]['alerts'].pop(0)  # Remove oldest entry
+                    behavior_tracker[hacker_ip]['counts'][alert_type] += 1
+                    behavior_summary = generate_behavior_summary(behavior_tracker[hacker_ip])
+                    alert_msgs.append(f"Behavior Summary: {behavior_summary}")
                     alert_msgs.append(f"Session: ACTIVE")
                     alert_msgs.append("=======================================================")
 
-            # AI anomaly detection with inferred activity and AI severity, with deduplication
+            # AI anomaly detection with inferred activity and AI severity, deduplication, and behavior tracking
             if ai_model:
                 try:
                     features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
                     prediction = ai_model.predict(features)  # -1 = anomaly, 1 = normal
                     if prediction[0] == -1:  # Anomaly detected
                         alert_type = "ai_compromise"
-                        if time.time() - alert_cooldown.get((src_ip if direction == "inbound" else dst_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
-                            alert_cooldown[(src_ip if direction == "inbound" else dst_ip, alert_type)] = time.time()
+                        if time.time() - alert_cooldown.get((hacker_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                            alert_cooldown[(hacker_ip, alert_type)] = time.time()
                             anomaly_score = ai_model.decision_function(features)[0]
                             activity = infer_possible_activity(direction, src_port, dst_port)
                             severity = get_ai_severity(anomaly_score)
                             if direction == "outbound":
-                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Outbound) ===\nWho (Hacker IP): {dst_ip}")
+                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Outbound) ===\nWho (Hacker IP): {hacker_ip}")
                             elif direction == "inbound":
-                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Inbound) ===\nWho (Hacker IP): {src_ip}")
+                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Inbound) ===\nWho (Hacker IP): {hacker_ip}")
                             else:
                                 alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
                             alert_msgs.append(f"When: {timestamp}")
                             alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
                             alert_msgs.append(f"Possible Activity: {activity}")
                             alert_msgs.append(f"Severity: {severity} (AI-assessed)")
+                            # Update behavior tracker
+                            behavior_tracker[hacker_ip]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                            if len(behavior_tracker[hacker_ip]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                                behavior_tracker[hacker_ip]['alerts'].pop(0)  # Remove oldest entry
+                            behavior_tracker[hacker_ip]['counts'][alert_type] += 1
+                            behavior_summary = generate_behavior_summary(behavior_tracker[hacker_ip])
+                            alert_msgs.append(f"Behavior Summary: {behavior_summary}")
                             alert_msgs.append(f"Session: ACTIVE")
                             alert_msgs.append("==============================")
                 except Exception as e:
                     if verbose:
                         print(f"[DEBUG] AI detection error: {e}")
 
-            # Port scan detection with AI severity and deduplication
+            # Port scan detection with AI severity, deduplication, and behavior tracking
             if direction == "inbound":
                 scan_tracker[src_ip].append(dst_port)
                 unique_ports = set(scan_tracker[src_ip])
                 if len(unique_ports) > 10:
                     alert_type = "port_scan"
-                    if time.time() - alert_cooldown.get((src_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
-                        alert_cooldown[(src_ip, alert_type)] = time.time()
+                    if time.time() - alert_cooldown.get((hacker_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                        alert_cooldown[(hacker_ip, alert_type)] = time.time()
                         if ai_model:
                             try:
                                 features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
@@ -376,19 +414,26 @@ def run_advanced_monitoring(realtime=True, interval=10):
                                 severity = "Medium"  # Fallback
                         else:
                             severity = "Medium"  # No AI model
-                        alert_msgs.append(f"\n=== PORT SCAN DETECTED ===\nScanner IP: {src_ip}")
+                        alert_msgs.append(f"\n=== PORT SCAN DETECTED ===\nScanner IP: {hacker_ip}")
                         alert_msgs.append(f"Scanned Ports: {', '.join(list(unique_ports)[:15])} ...")
                         alert_msgs.append(f"When: {timestamp}")
                         alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                        # Update behavior tracker
+                        behavior_tracker[hacker_ip]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                        if len(behavior_tracker[hacker_ip]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                            behavior_tracker[hacker_ip]['alerts'].pop(0)  # Remove oldest entry
+                        behavior_tracker[hacker_ip]['counts'][alert_type] += 1
+                        behavior_summary = generate_behavior_summary(behavior_tracker[hacker_ip])
+                        alert_msgs.append(f"Behavior Summary: {behavior_summary}")
                         alert_msgs.append("==========================")
 
-            # Brute force detection with AI severity and deduplication
+            # Brute force detection with AI severity, deduplication, and behavior tracking
             if direction == "inbound":
                 brute_tracker[(src_ip, dst_port)].append(timestamp)
                 if len(brute_tracker[(src_ip, dst_port)]) > 20:
                     alert_type = "brute_force"
-                    if time.time() - alert_cooldown.get((src_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
-                        alert_cooldown[(src_ip, alert_type)] = time.time()
+                    if time.time() - alert_cooldown.get((hacker_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                        alert_cooldown[(hacker_ip, alert_type)] = time.time()
                         if ai_model:
                             try:
                                 features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
@@ -400,14 +445,21 @@ def run_advanced_monitoring(realtime=True, interval=10):
                                 severity = "High"  # Fallback for brute force
                         else:
                             severity = "High"  # No AI model, default high for brute force
-                        alert_msgs.append(f"\n=== BRUTE FORCE ATTEMPT DETECTED ===\nAttacker IP: {src_ip}")
+                        alert_msgs.append(f"\n=== BRUTE FORCE ATTEMPT DETECTED ===\nAttacker IP: {hacker_ip}")
                         alert_msgs.append(f"Target Port: {dst_port}")
                         alert_msgs.append(f"Attempts: {len(brute_tracker[(src_ip,dst_port)])}")
                         alert_msgs.append(f"When: {timestamp}")
                         alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                        # Update behavior tracker
+                        behavior_tracker[hacker_ip]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                        if len(behavior_tracker[hacker_ip]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                            behavior_tracker[hacker_ip]['alerts'].pop(0)  # Remove oldest entry
+                        behavior_tracker[hacker_ip]['counts'][alert_type] += 1
+                        behavior_summary = generate_behavior_summary(behavior_tracker[hacker_ip])
+                        alert_msgs.append(f"Behavior Summary: {behavior_summary}")
                         alert_msgs.append("===============================")
 
-            # Periodically check for suspicious processes with heuristic severity and deduplication
+            # Periodically check for suspicious processes with heuristic severity, deduplication, and behavior tracking
             now = time.time()
             if now - last_proc_check > 10:
                 proc_alerts = check_suspicious_processes()
@@ -419,6 +471,13 @@ def run_advanced_monitoring(realtime=True, interval=10):
                         alert_cooldown[(process_name, alert_type)] = time.time()
                         heuristic_severity = infer_process_severity(process_name)
                         process_alert_msg = f"{alert}\nSeverity: {heuristic_severity} (heuristic)"
+                        # For process alerts, use process name as the key for behavior tracking (since no IP is involved)
+                        behavior_tracker[process_name]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                        if len(behavior_tracker[process_name]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                            behavior_tracker[process_name]['alerts'].pop(0)  # Remove oldest entry
+                        behavior_tracker[process_name]['counts'][alert_type] += 1
+                        behavior_summary = generate_behavior_summary(behavior_tracker[process_name])
+                        process_alert_msg += f"\nBehavior Summary: {behavior_summary}"
                         alert_msgs.append(f"\n{process_alert_msg}")
                 last_proc_check = now
 
