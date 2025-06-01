@@ -4,6 +4,8 @@ import os
 import requests
 import tarfile
 import shutil
+import time
+from collections import defaultdict
 
 REQUIRED_PACKAGES = [
     "psutil",
@@ -30,7 +32,6 @@ install_and_restart_if_needed()
 
 import pickle
 import numpy as np
-import time
 import threading
 import json
 from collections import defaultdict, deque
@@ -45,6 +46,7 @@ SUSPICIOUS_PORTS = {4444, 8080, 1337, 9001, 9002, 6666, 1234, 4321, 31337, 2222,
 SUSPICIOUS_PROCS = [
     'certutil', 'powershell', 'cmd', 'wscript', 'cscript', 'mshta', 'bitsadmin', 'rundll32', 'regsvr32', 'wmic', 'ftp', 'telnet', 'ssh'
 ]
+ALERT_COOLDOWN_SECONDS = 60  # Cooldown period in seconds for alert deduplication
 
 def list_interfaces_with_ips():
     interfaces = []
@@ -262,6 +264,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
     local_ips = get_local_ips()
     scan_tracker = defaultdict(lambda: deque(maxlen=100))  # src_ip -> deque of dst_ports
     brute_tracker = defaultdict(lambda: deque(maxlen=100)) # src_ip+dst_port -> deque of timestamps
+    alert_cooldown = defaultdict(float)  # Track last alert time for (IP, alert_type) or (process_name, "suspicious_process")
 
     alerts = []
     last_update = time.time()
@@ -298,109 +301,125 @@ def run_advanced_monitoring(realtime=True, interval=10):
 
             alert_msgs = []
 
-            # Heuristic: suspicious port with AI severity
+            # Heuristic: suspicious port with AI severity and alert deduplication
             if dst_port.isdigit() and int(dst_port) in SUSPICIOUS_PORTS:
-                if ai_model:
-                    try:
-                        features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
-                        anomaly_score = ai_model.decision_function(features)[0]
-                        severity = get_ai_severity(anomaly_score)
-                    except Exception as e:
-                        if verbose:
-                            print(f"[DEBUG] AI severity error for heuristic alert: {e}")
-                        severity = "Medium"  # Fallback if AI fails
-                else:
-                    severity = "Medium"  # No AI model, use default
-                if direction == "outbound":
-                    alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Reverse Shell/Outbound) ===\nWho (Hacker IP): {dst_ip}")
-                elif direction == "inbound":
-                    alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Inbound/Scan/Exploit) ===\nWho (Hacker IP): {src_ip}")
-                else:
-                    alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
-                alert_msgs.append(f"When: {timestamp}")
-                alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
-                alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
-                alert_msgs.append(f"Session: ACTIVE")
-                alert_msgs.append("=======================================================")
+                alert_type = "heuristic"
+                if time.time() - alert_cooldown.get((src_ip if direction == "inbound" else dst_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                    alert_cooldown[(src_ip if direction == "inbound" else dst_ip, alert_type)] = time.time()
+                    if ai_model:
+                        try:
+                            features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                            anomaly_score = ai_model.decision_function(features)[0]
+                            severity = get_ai_severity(anomaly_score)
+                        except Exception as e:
+                            if verbose:
+                                print(f"[DEBUG] AI severity error for heuristic alert: {e}")
+                            severity = "Medium"  # Fallback
+                    else:
+                        severity = "Medium"  # No AI model
+                    if direction == "outbound":
+                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Reverse Shell/Outbound) ===\nWho (Hacker IP): {dst_ip}")
+                    elif direction == "inbound":
+                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Inbound/Scan/Exploit) ===\nWho (Hacker IP): {src_ip}")
+                    else:
+                        alert_msgs.append(f"\n=== HEURISTIC COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
+                    alert_msgs.append(f"When: {timestamp}")
+                    alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
+                    alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                    alert_msgs.append(f"Session: ACTIVE")
+                    alert_msgs.append("=======================================================")
 
-            # AI anomaly detection with inferred activity and AI severity
+            # AI anomaly detection with inferred activity and AI severity, with deduplication
             if ai_model:
                 try:
                     features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
                     prediction = ai_model.predict(features)  # -1 = anomaly, 1 = normal
                     if prediction[0] == -1:  # Anomaly detected
-                        anomaly_score = ai_model.decision_function(features)[0]
-                        activity = infer_possible_activity(direction, src_port, dst_port)
-                        severity = get_ai_severity(anomaly_score)
-                        if direction == "outbound":
-                            alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Outbound) ===\nWho (Hacker IP): {dst_ip}")
-                        elif direction == "inbound":
-                            alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Inbound) ===\nWho (Hacker IP): {src_ip}")
-                        else:
-                            alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
-                        alert_msgs.append(f"When: {timestamp}")
-                        alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
-                        alert_msgs.append(f"Possible Activity: {activity}")
-                        alert_msgs.append(f"Severity: {severity} (AI-assessed)")
-                        alert_msgs.append(f"Session: ACTIVE")
-                        alert_msgs.append("==============================")
+                        alert_type = "ai_compromise"
+                        if time.time() - alert_cooldown.get((src_ip if direction == "inbound" else dst_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                            alert_cooldown[(src_ip if direction == "inbound" else dst_ip, alert_type)] = time.time()
+                            anomaly_score = ai_model.decision_function(features)[0]
+                            activity = infer_possible_activity(direction, src_port, dst_port)
+                            severity = get_ai_severity(anomaly_score)
+                            if direction == "outbound":
+                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Outbound) ===\nWho (Hacker IP): {dst_ip}")
+                            elif direction == "inbound":
+                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Inbound) ===\nWho (Hacker IP): {src_ip}")
+                            else:
+                                alert_msgs.append(f"\n=== AI COMPROMISE DETECTED (Unknown Direction) ===\nSrc: {src_ip}  Dst: {dst_ip}")
+                            alert_msgs.append(f"When: {timestamp}")
+                            alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}  Packet Size: {pkt_len}")
+                            alert_msgs.append(f"Possible Activity: {activity}")
+                            alert_msgs.append(f"Severity: {severity} (AI-assessed)")
+                            alert_msgs.append(f"Session: ACTIVE")
+                            alert_msgs.append("==============================")
                 except Exception as e:
                     if verbose:
                         print(f"[DEBUG] AI detection error: {e}")
 
-            # Port scan detection with AI severity
+            # Port scan detection with AI severity and deduplication
             if direction == "inbound":
                 scan_tracker[src_ip].append(dst_port)
                 unique_ports = set(scan_tracker[src_ip])
                 if len(unique_ports) > 10:
-                    if ai_model:
-                        try:
-                            features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
-                            anomaly_score = ai_model.decision_function(features)[0]
-                            severity = get_ai_severity(anomaly_score)
-                        except Exception as e:
-                            if verbose:
-                                print(f"[DEBUG] AI severity error for port scan: {e}")
-                            severity = "Medium"  # Fallback
-                    else:
-                        severity = "Medium"  # No AI model
-                    alert_msgs.append(f"\n=== PORT SCAN DETECTED ===\nScanner IP: {src_ip}")
-                    alert_msgs.append(f"Scanned Ports: {', '.join(list(unique_ports)[:15])} ...")
-                    alert_msgs.append(f"When: {timestamp}")
-                    alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
-                    alert_msgs.append("==========================")
+                    alert_type = "port_scan"
+                    if time.time() - alert_cooldown.get((src_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                        alert_cooldown[(src_ip, alert_type)] = time.time()
+                        if ai_model:
+                            try:
+                                features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                                anomaly_score = ai_model.decision_function(features)[0]
+                                severity = get_ai_severity(anomaly_score)
+                            except Exception as e:
+                                if verbose:
+                                    print(f"[DEBUG] AI severity error for port scan: {e}")
+                                severity = "Medium"  # Fallback
+                        else:
+                            severity = "Medium"  # No AI model
+                        alert_msgs.append(f"\n=== PORT SCAN DETECTED ===\nScanner IP: {src_ip}")
+                        alert_msgs.append(f"Scanned Ports: {', '.join(list(unique_ports)[:15])} ...")
+                        alert_msgs.append(f"When: {timestamp}")
+                        alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                        alert_msgs.append("==========================")
 
-            # Brute force detection with AI severity
+            # Brute force detection with AI severity and deduplication
             if direction == "inbound":
                 brute_tracker[(src_ip, dst_port)].append(timestamp)
                 if len(brute_tracker[(src_ip, dst_port)]) > 20:
-                    if ai_model:
-                        try:
-                            features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
-                            anomaly_score = ai_model.decision_function(features)[0]
-                            severity = get_ai_severity(anomaly_score)
-                        except Exception as e:
-                            if verbose:
-                                print(f"[DEBUG] AI severity error for brute force: {e}")
-                            severity = "High"  # Fallback for brute force
-                    else:
-                        severity = "High"  # No AI model, default high for brute force
-                    alert_msgs.append(f"\n=== BRUTE FORCE ATTEMPT DETECTED ===\nAttacker IP: {src_ip}")
-                    alert_msgs.append(f"Target Port: {dst_port}")
-                    alert_msgs.append(f"Attempts: {len(brute_tracker[(src_ip,dst_port)])}")
-                    alert_msgs.append(f"When: {timestamp}")
-                    alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
-                    alert_msgs.append("===============================")
+                    alert_type = "brute_force"
+                    if time.time() - alert_cooldown.get((src_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                        alert_cooldown[(src_ip, alert_type)] = time.time()
+                        if ai_model:
+                            try:
+                                features = np.array([[int(src_port), int(dst_port), int(pkt_len)]])
+                                anomaly_score = ai_model.decision_function(features)[0]
+                                severity = get_ai_severity(anomaly_score)
+                            except Exception as e:
+                                if verbose:
+                                    print(f"[DEBUG] AI severity error for brute force: {e}")
+                                severity = "High"  # Fallback for brute force
+                        else:
+                            severity = "High"  # No AI model, default high for brute force
+                        alert_msgs.append(f"\n=== BRUTE FORCE ATTEMPT DETECTED ===\nAttacker IP: {src_ip}")
+                        alert_msgs.append(f"Target Port: {dst_port}")
+                        alert_msgs.append(f"Attempts: {len(brute_tracker[(src_ip,dst_port)])}")
+                        alert_msgs.append(f"When: {timestamp}")
+                        alert_msgs.append(f"Severity: {severity} (AI-assessed)" if ai_model else f"Severity: {severity} (heuristic)")
+                        alert_msgs.append("===============================")
 
-            # Periodically check for suspicious processes with heuristic severity
+            # Periodically check for suspicious processes with heuristic severity and deduplication
             now = time.time()
             if now - last_proc_check > 10:
                 proc_alerts = check_suspicious_processes()
                 for alert in proc_alerts:
-                    process_name = alert.split()[3]  # Extract process name from alert string (e.g., "Suspicious process: powershell")
-                    heuristic_severity = infer_process_severity(process_name)
-                    process_alert_msg = f"{alert}\nSeverity: {heuristic_severity} (heuristic)"
-                    alert_msgs.append(f"\n{process_alert_msg}")
+                    # Extract process name from alert string, e.g., "Suspicious process: powershell (PID 1234) CMD: ..."
+                    process_name = alert.split()[3]  # Assumes format is consistent
+                    alert_type = "suspicious_process"
+                    if time.time() - alert_cooldown.get((process_name, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                        alert_cooldown[(process_name, alert_type)] = time.time()
+                        heuristic_severity = infer_process_severity(process_name)
+                        process_alert_msg = f"{alert}\nSeverity: {heuristic_severity} (heuristic)"
+                        alert_msgs.append(f"\n{process_alert_msg}")
                 last_proc_check = now
 
             # Output alerts
