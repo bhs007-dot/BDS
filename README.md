@@ -1,5 +1,6 @@
 # Blue Team Detection Script (BDSv1)
 
+
 ## Overview
 This Python script is a comprehensive blue team tool designed for authorized penetration testers and cybersecurity professionals. It provides hybrid intrusion detection using AI-based anomaly detection, heuristic rules, and process monitoring. The script captures network traffic for AI training, detects potential compromises, and integrates Suricata IDS for enhanced alerting. It's built for ethical hacking and security testing, ensuring compliance with authorized activities.
 
@@ -27,6 +28,7 @@ As a certified pentester (e.g., OSCP, CEH), this tool helps streamline your defe
    - Suricata: Download from [https://suricata-ids.org/download/](https://suricata-ids.org/download/). On Windows, use WSL for easier setup if needed.
 3. Run the script with Python:
 4. python BDSv1.py
+
 5. The script will automatically check and install Python packages like `psutil`, `numpy`, and `scikit-learn` if missing.
 
 ## Usage
