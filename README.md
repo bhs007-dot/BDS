@@ -1,4 +1,5 @@
-  
+#Note:
+this script should be run in windows enviroments
  Blue Team Defense Tool
 
 # Blue Team Detection Script (BDSv1)
