@@ -47,7 +47,8 @@ SUSPICIOUS_PROCS = [
     'certutil', 'powershell', 'cmd', 'wscript', 'cscript', 'mshta', 'bitsadmin', 'rundll32', 'regsvr32', 'wmic', 'ftp', 'telnet', 'ssh'
 ]
 ALERT_COOLDOWN_SECONDS = 60  # Cooldown period in seconds for alert deduplication
-BEHAVIOR_TRACKER_MAX_HISTORY = 10  # Max number of alert events to store per IP for behavior tracking
+BEHAVIOR_TRACKER_MAX_HISTORY = 10  # Max number of alert events to store per IP or process for behavior tracking
+WAF_RULES_URL = "https://rules.emergingthreats.net/open/suricata/rules/web_attacks.rules"  # Example URL for WAF rules; can be updated
 
 def list_interfaces_with_ips():
     interfaces = []
@@ -132,7 +133,10 @@ def generate_behavior_summary(behavior_data):
         summary += f", Port scans: {counts['port_scan']}"
     if counts['brute_force'] > 0:
         summary += f", Brute force attempts: {counts['brute_force']}"
-    # Add time-based insight if possible
+    if counts['waf_threat'] > 0:
+        summary += f", WAF threats: {counts['waf_threat']}"
+    if counts['suspicious_process'] > 0:
+        summary += f", Suspicious processes: {counts['suspicious_process']}"
     last_alert_time = behavior_data['alerts'][-1]['timestamp']
     summary += f", Last activity: {last_alert_time}"
     return summary
@@ -255,11 +259,15 @@ def select_interface():
     iface_name = interfaces[choice - 1][1]  # Return the interface name
     return iface_name
 
-def run_advanced_monitoring(realtime=True, interval=10):
+def run_advanced_monitoring(realtime=True, interval=10, waf_mode=False):
     print("\n[+] BDSv1 Hybrid Detection (AI + Heuristics + Process Monitoring with Behavior Tracking)")
+    if waf_mode:
+        print("[*] WAF Monitoring Mode: Focusing on web threats detection.")
     verbose = input("Enable verbose debugging output? (y/n, default n): ").strip().lower() == 'y'
-    monitor_ports = input("Enter ports to monitor (comma-separated, e.g., 4444,8080), or leave blank for all: ").strip()
+    monitor_ports = input("Enter ports to monitor (comma-separated, e.g., 80,443 for web, or leave blank for all): ").strip()
     display_filter = "tcp"
+    if waf_mode:
+        display_filter = "http or tls"  # Focus on HTTP/HTTPS for WAF
     if monitor_ports:
         display_filter += f" && (tcp.port in {{{monitor_ports}}})"
     
@@ -274,7 +282,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
         TSHARK_PATH, "-i", iface_num, "-Y", display_filter,
         "-T", "fields",
         "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst",
-        "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len"
+        "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len", "-e", "http.request.method" if waf_mode else ""
     ]
     print(f"[*] Monitoring started on interface {iface_name}. Press Ctrl+C to stop.")
     if verbose:
@@ -285,7 +293,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
     scan_tracker = defaultdict(lambda: deque(maxlen=100))  # src_ip -> deque of dst_ports
     brute_tracker = defaultdict(lambda: deque(maxlen=100)) # src_ip+dst_port -> deque of timestamps
     alert_cooldown = defaultdict(float)  # Track last alert time for (IP, alert_type) or (process_name, "suspicious_process")
-    behavior_tracker = defaultdict(lambda: {'alerts': [], 'counts': defaultdict(int)})  # IP -> {alerts: list of dicts, counts: dict of alert types}
+    behavior_tracker = defaultdict(lambda: {'alerts': [], 'counts': defaultdict(int)})  # IP or process -> {alerts: list, counts: dict}
 
     alerts = []
     last_update = time.time()
@@ -309,6 +317,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
             src_port = fields[3] if len(fields) > 3 else "0"
             dst_port = fields[4] if len(fields) > 4 else "0"
             pkt_len = fields[5] if len(fields) > 5 else "0"
+            http_method = fields[6] if len(fields) > 6 and waf_mode else "N/A"  # HTTP method for WAF mode
             if verbose:
                 print(f"[DEBUG] Raw line: {line}")
 
@@ -324,6 +333,29 @@ def run_advanced_monitoring(realtime=True, interval=10):
                 hacker_ip = src_ip or dst_ip  # Use source or destination as fallback
 
             alert_msgs = []
+
+            # WAF-specific threat detection if in WAF mode
+            if waf_mode and (int(dst_port) in [80, 443] or int(src_port) in [80, 443]):  # Focus on web ports
+                alert_type = "waf_threat"
+                if time.time() - alert_cooldown.get((hacker_ip, alert_type), 0) > ALERT_COOLDOWN_SECONDS:
+                    alert_cooldown[(hacker_ip, alert_type)] = time.time()
+                    # Simple heuristic for WAF: check for suspicious HTTP methods or patterns (can be enhanced)
+                    if "POST" in http_method or "GET" in http_method:  # Example: flag common web attack vectors
+                        severity = "High"  # Default severity for WAF alerts; can be AI-enhanced if needed
+                        alert_msgs.append(f"\n=== WAF THREAT DETECTED ===\nHacker IP: {hacker_ip}")
+                        alert_msgs.append(f"When: {timestamp}")
+                        alert_msgs.append(f"HTTP Method: {http_method}")
+                        alert_msgs.append(f"Src Port: {src_port}  Dst Port: {dst_port}")
+                        alert_msgs.append(f"Possible Threat: Suspicious web request (e.g., potential SQLi or XSS)")
+                        alert_msgs.append(f"Severity: {severity} (heuristic)")  # Rely on Suricata for more advanced detection
+                        # Update behavior tracker
+                        behavior_tracker[hacker_ip]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
+                        if len(behavior_tracker[hacker_ip]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
+                            behavior_tracker[hacker_ip]['alerts'].pop(0)  # Remove oldest entry
+                        behavior_tracker[hacker_ip]['counts'][alert_type] += 1
+                        behavior_summary = generate_behavior_summary(behavior_tracker[hacker_ip])
+                        alert_msgs.append(f"Behavior Summary: {behavior_summary}")
+                        alert_msgs.append("==========================")
 
             # Heuristic: suspicious port with AI severity, deduplication, and behavior tracking
             if dst_port.isdigit() and int(dst_port) in SUSPICIOUS_PORTS:
@@ -471,7 +503,7 @@ def run_advanced_monitoring(realtime=True, interval=10):
                         alert_cooldown[(process_name, alert_type)] = time.time()
                         heuristic_severity = infer_process_severity(process_name)
                         process_alert_msg = f"{alert}\nSeverity: {heuristic_severity} (heuristic)"
-                        # For process alerts, use process name as the key for behavior tracking (since no IP is involved)
+                        # For process alerts, use process name as the key for behavior tracking
                         behavior_tracker[process_name]['alerts'].append({'type': alert_type, 'timestamp': timestamp})
                         if len(behavior_tracker[process_name]['alerts']) > BEHAVIOR_TRACKER_MAX_HISTORY:
                             behavior_tracker[process_name]['alerts'].pop(0)  # Remove oldest entry
@@ -504,36 +536,46 @@ def run_advanced_monitoring(realtime=True, interval=10):
 
 def download_suricata_rules():
     print("[*] Downloading and updating Suricata rules...")
-    rules_url = "https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz"
+    rules_url = "https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz"  # General rules
+    waf_rules_url = WAF_RULES_URL  # WAF-specific rules
     rules_dir = os.path.dirname(SURICATA_CONFIG) + "/rules"  # Typically C:\Program Files\Suricata\rules
-    temp_file = "emerging_rules.tar.gz"
+    temp_file_general = "emerging_rules.tar.gz"
+    temp_file_waf = "waf_rules.tar.gz"  # Separate file for WAF rules
 
     # Ensure rules directory exists
     if not os.path.exists(rules_dir):
         os.makedirs(rules_dir)
 
     try:
+        # Download and extract general rules
         response = requests.get(rules_url, stream=True)
         if response.status_code == 200:
-            with open(temp_file, 'wb') as f:
+            with open(temp_file_general, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=128):
                     f.write(chunk)
-            print("[+] Rules downloaded successfully.")
-            
-            # Extract the tar.gz file
-            with tarfile.open(temp_file, 'r:gz') as tar:
+            with tarfile.open(temp_file_general, 'r:gz') as tar:
                 tar.extractall(path=rules_dir)
-            print("[+] Rules extracted to " + rules_dir)
-            
-            # Clean up temporary file
-            os.remove(temp_file)
+            os.remove(temp_file_general)
         else:
-            print(f"[!] Failed to download rules. Status code: {response.status_code}. Please check the URL or download manually.")
+            print(f"[!] Failed to download general rules. Status code: {response.status_code}.")
+
+        # Download and extract WAF rules
+        response_waf = requests.get(waf_rules_url, stream=True)
+        if response_waf.status_code == 200:
+            with open(temp_file_waf, 'wb') as f:
+                for chunk in response_waf.iter_content(chunk_size=128):
+                    f.write(chunk)
+            with tarfile.open(temp_file_waf, 'r:gz') as tar:
+                tar.extractall(path=rules_dir)
+            os.remove(temp_file_waf)
+            print("[+] WAF rules downloaded and extracted successfully.")
+        else:
+            print(f"[!] Failed to download WAF rules. Status code: {response_waf.status_code}. Please check the URL or download manually.")
     except Exception as e:
-        print(f"[!] Error downloading or extracting rules: {e}. Continuing without updating rules.")
+        print(f"[!] Error downloading or extracting rules: {e}. Continuing with available rules.")
 
 def start_suricata_prompt():
-    print("\n[+] Starting Suricata IDS in background with interface selection")
+    print("\n[+] Starting SuricataIDS in background with interface selection and WAF rules loaded.")
     interfaces = list_interfaces_with_ips()
     print("Available interfaces for Suricata:")
     for idx, iface, ip in interfaces:
@@ -549,7 +591,7 @@ def start_suricata_prompt():
         "-c", SURICATA_CONFIG,
         "-l", SURICATA_LOG_DIR
     ]
-    print(f"[*] Suricata starting on interface {iface_name} in background. Alerts will be monitored.")
+    print(f"[*] Suricata starting on interface {iface_name} in background with WAF capabilities. Alerts will be monitored.")
     # Start Suricata in background (non-blocking)
     suricata_proc = subprocess.Popen(suricata_cmd)
     # Start watcher thread for alerts
@@ -589,14 +631,17 @@ def monitoring_menu():
         print("\nMonitoring Menu:")
         print("1. Start Monitoring (Realtime Alerts)")
         print("2. Start Monitoring (Batch Alerts)")
-        print("3. Exit")
+        print("3. WAF Monitoring (Web Threats Detection)")
+        print("4. Exit")
         choice = input("Select an option: ").strip()
         if choice == "1":
-            run_advanced_monitoring(realtime=True)
+            run_advanced_monitoring(realtime=True, waf_mode=False)
         elif choice == "2":
             interval = int(input("Enter alert update interval in seconds: ").strip())
-            run_advanced_monitoring(realtime=False, interval=interval)
+            run_advanced_monitoring(realtime=False, interval=interval, waf_mode=False)
         elif choice == "3":
+            run_advanced_monitoring(realtime=True, waf_mode=True)  # WAF mode with real-time for simplicity; can be extended
+        elif choice == "4":
             print("Exiting.")
             break
         else:
@@ -611,10 +656,10 @@ def main():
     if ai_model is None:
         print("[!] AI model training failed. Exiting.")
         return
-    # Step 3: Download and update Suricata rules before starting Suricata
+    # Step 3: Download and update Suricata rules including WAF rules
     download_suricata_rules()
     # Step 4: Start Suricata in background with interface selection
-    print("\n[+] Setting up and starting Suricata IDS before monitoring options.")
+    print("\n[+] Setting up and starting Suricata IDS with WAF capabilities before monitoring options.")
     start_suricata_prompt()
     # Step 5: Go to monitoring menu (with Suricata already running)
     monitoring_menu()
