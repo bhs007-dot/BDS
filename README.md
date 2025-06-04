@@ -1,6 +1,6 @@
 # Blue Team Defense System (BDSv1) - README
 
-![Blue Team Banner](https://via.placeholder.com/1200x400?text=Blue+Team+Defense+System)  
+![Blue Team Banner](blue-team-banner.png)  
 *Banner image: Replace with your own blue team cybersecurity image for better visuals.*
 
 ## Overview
