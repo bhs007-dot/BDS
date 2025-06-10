@@ -1,5 +1,12 @@
 # Blue Team Defense System (BDSv1) - README
 
+Donate for me over crypto BTC ADDRESS 
+12zsQF6XgiNtu5SgGUgi5R66DwhTyPTSaN
+
+
+
+
+
 ![Blue Team Banner](blue-team-banner.png)  
 *Banner image: Replace with your own blue team cybersecurity image for better visuals.*
 
