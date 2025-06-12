@@ -13,7 +13,8 @@ BANNER = r"""
 ---------------------------------------------------------------
 Blue Team Defense System (BDSv1)
 (C) 2024 itsolutions007 | Instagram: @itsolutions007
-Scan the QR code below to visit my Instagram!
+YouTube: @bhsecuritycybersecurity4377
+Scan the QR codes below to visit my Instagram and YouTube!
 (I have permission and am authorized for pentest)
 ---------------------------------------------------------------
 """
@@ -28,15 +29,40 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "qrcode[pil]"])
     import qrcode
 
-def show_instagram_qr():
+def get_qr_ascii_lines(url):
     qr = qrcode.QRCode(border=2)
-    qr.add_data("https://instagram.com/itsolutions007")
+    qr.add_data(url)
     qr.make(fit=True)
-    qr.print_ascii(invert=True)
-    print("Scan this QR code to visit Instagram: @itsolutions007\n")
+    # Capture the ASCII output as a list of lines
+    import io
+    buf = io.StringIO()
+    qr.print_ascii(out=buf, invert=True)
+    buf.seek(0)
+    lines = buf.read().splitlines()
+    return lines
 
-show_instagram_qr()
+# Generate QR codes as lists of lines
+insta_lines = get_qr_ascii_lines("https://instagram.com/itsolutions007")
+yt_lines = get_qr_ascii_lines("https://www.youtube.com/@bhsecuritycybersecurity4377")
+
+# Ensure both QR codes have the same number of lines for side-by-side display
+max_lines = max(len(insta_lines), len(yt_lines))
+insta_lines += [' ' * len(insta_lines[0])] * (max_lines - len(insta_lines))
+yt_lines += [' ' * len(yt_lines[0])] * (max_lines - len(yt_lines))
+
+# Print labels above each QR code
+label_space = " " * 4
+insta_label = "Instagram: @itsolutions007"
+yt_label = "YouTube: @bhsecuritycybersecurity4377"
+print(f"{insta_label:<{len(insta_lines[0])}}{label_space}{yt_label}")
+
+# Print QR codes side by side
+for l1, l2 in zip(insta_lines, yt_lines):
+    print(f"{l1}{label_space}{l2}")
+
+print("\nScan the left QR for Instagram and the right QR for YouTube!\n")
 # ================== END BANNER & QR CODE SECTION ==================
+
 
 import requests
 import tarfile
