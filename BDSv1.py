@@ -1,6 +1,43 @@
+# ================== BANNER & QR CODE SECTION ==================
 import sys
 import subprocess
 import os
+
+BANNER = r"""
+██████╗ ██████╗ ███████╗    ████████╗███████╗██╗     ██╗   ██╗
+██╔══██╗██╔══██╗██╔════╝    ╚══██╔══╝██╔════╝██║     ██║   ██║
+██████╔╝██████╔╝█████╗         ██║   █████╗  ██║     ██║   ██║
+██╔═══╝ ██╔══██╗██╔══╝         ██║   ██╔══╝  ██║     ██║   ██║
+██║     ██║  ██║███████╗       ██║   ███████╗███████╗╚██████╔╝
+╚═╝     ╚═╝  ╚═╝╚══════╝       ╚═╝   ╚══════╝╚══════╝ ╚═════╝ 
+---------------------------------------------------------------
+Blue Team Defense System (BDSv1)
+(C) 2024 itsolutions007 | Instagram: @itsolutions007
+Scan the QR code below to visit my Instagram!
+(I have permission and am authorized for pentest)
+---------------------------------------------------------------
+"""
+
+print(BANNER)
+
+# Ensure qrcode is installed
+try:
+    import qrcode
+except ImportError:
+    print("[*] Installing qrcode library for QR code display...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "qrcode[pil]"])
+    import qrcode
+
+def show_instagram_qr():
+    qr = qrcode.QRCode(border=2)
+    qr.add_data("https://instagram.com/itsolutions007")
+    qr.make(fit=True)
+    qr.print_ascii(invert=True)
+    print("Scan this QR code to visit Instagram: @itsolutions007\n")
+
+show_instagram_qr()
+# ================== END BANNER & QR CODE SECTION ==================
+
 import requests
 import tarfile
 import shutil
